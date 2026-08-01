@@ -1,12 +1,14 @@
 # E-Commerce Bronze Ingestion Platform
 
-A governed, end-to-end data ingestion platform built on **Azure Databricks** and **Unity Catalog**, combining batch and real-time streaming pipelines into a single bronze layer, built as a team sprint to simulate a real production data engineering workflow, from infrastructure to dashboard.
+A governed, end-to-end data ingestion platform built on **Azure Databricks** and **Unity Catalog**, combining batch and real-time streaming pipelines into a single bronze layer, built as a team sprint to simulate a real production data engineering workflow, from infrastructure to dashboard. 
+
+Built as part of the **SoftServe Academy** Data Engineering track.
 
 ## What this project demonstrates
 
 This isn't a tutorial exercise, it's a working platform that ingests real e-commerce data two different ways, handles a live schema change without downtime, and surfaces the results in a dashboard, all under proper data governance.
 
-- **Governed infrastructure**: Unity Catalog (catalog / schema / volumes), secrets managed through an Azure Key Vault-backed secret scope — no credentials ever hardcoded
+- **Governed infrastructure**: Unity Catalog (catalog / schema / volumes), secrets managed through an Azure Key Vault-backed secret scope, no credentials ever hardcoded
 - **Batch ingestion**: idempotent, re-runnable loads of reference data (customers, products, category mappings) from the [Brazilian E-Commerce Public Dataset by Olist](https://www.kaggle.com/datasets/olistbr/brazilian-ecommerce)
 - **Streaming ingestion**: real-time order events published to Azure Event Hub and consumed via Spark Structured Streaming, using Event Hub's Kafka-compatible endpoint
 - **Live schema evolution**: a new `discount_code` field is introduced mid-stream and absorbed without restarting the pipeline — demonstrating how production streaming systems handle evolving source data
