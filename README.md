@@ -13,7 +13,6 @@ The project is developed as part of the SoftServe Databricks Academy checkpoint,
 
 ## Architecture
 The platform follows a Bronze-layer ingestion architecture:
-
 ```text
                      Batch Sources
                           |
@@ -42,3 +41,13 @@ The platform follows a Bronze-layer ingestion architecture:
 
                  Dashboard / Analytics
 ```
+
+## Technologies Used
+* Azure Databricks
+* Unity Catalog
+* Azure Data Lake Storage Gen2
+* Azure Event Hub
+* Apache Spark Structured Streaming
+* Delta Lake
+* GitHub
+
