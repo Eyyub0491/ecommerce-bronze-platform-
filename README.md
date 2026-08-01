@@ -56,15 +56,12 @@ This isn't a tutorial exercise, it's a working platform that ingests real e-comm
 
 ```
 ecommerce-databricks-platform/
-├── architecture/                    # Architecture diagrams
 ├── notebooks/
 │   ├── 01_setup/                    # Unity Catalog schema, volumes, external locations
 │   ├── 02_batch_ingestion/          # CSV → bronze, idempotent, metadata-tracked
 │   ├── 03_streaming_ingestion/      # Event Hub producer + Structured Streaming consumer
 │   ├── 04_schema_evolution/         # Documented live schema-change demo
 │   └── 05_dashboard/                # Revenue and sales analytics
-├── docs/
-├── sql/
 └── README.md
 ```
 
