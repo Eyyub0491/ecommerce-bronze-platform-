@@ -1,0 +1,1857 @@
+{
+  "datasets": [
+    {
+      "name": "d9b56b61",
+      "displayName": "dataset",
+      "queryLines": [
+        "SELECT\n",
+        "    o.order_id,\n",
+        "    o.order_timestamp,\n",
+        "    DATE(o.order_timestamp) AS order_date,\n",
+        "    DATE_TRUNC('month', o.order_timestamp) AS order_month,\n",
+        "    DATE_FORMAT(o.order_timestamp, 'yyyy-MM') AS order_month_label,\n",
+        "\n",
+        "    c.customer_id,\n",
+        "    c.customer_city,\n",
+        "    c.customer_state,\n",
+        "\n",
+        "    COALESCE(s.state_name, 'Unknown') AS state_name,\n",
+        "    COALESCE(s.region, 'Unknown') AS region,\n",
+        "\n",
+        "    o.product_id,\n",
+        "\n",
+        "    COALESCE(\n",
+        "        pc.product_category_name_english,\n",
+        "        p.product_category_name,\n",
+        "        'Unknown'\n",
+        "    ) AS product_category,\n",
+        "\n",
+        "    o.quantity,\n",
+        "    o.price,\n",
+        "\n",
+        "   \n",
+        "    ROUND(o.price, 2) AS revenue,\n",
+        "\n",
+        "   \n",
+        "    CASE \n",
+        "        WHEN ROW_NUMBER() OVER (\n",
+        "            PARTITION BY o.order_id \n",
+        "            ORDER BY o.product_id\n",
+        "        ) = 1 \n",
+        "        THEN 1 \n",
+        "        ELSE 0 \n",
+        "    END AS total_orders,\n",
+        "\n",
+        "    o.source,\n",
+        "    o.ingestion_timestamp\n",
+        "\n",
+        "FROM\n",
+        "    dbr_dev.brazilian_ecommerce_bronze.brz_orders o\n",
+        "\n",
+        "LEFT JOIN \n",
+        "    dbr_dev.brazilian_ecommerce_bronze.brz_customers c\n",
+        "    ON o.customer_id = c.customer_id\n",
+        "\n",
+        "LEFT JOIN \n",
+        "    dbr_dev.brazilian_ecommerce_bronze.dim_brazil_states s\n",
+        "    ON c.customer_state = s.state_code\n",
+        "\n",
+        "LEFT JOIN \n",
+        "    dbr_dev.brazilian_ecommerce_bronze.brz_products p\n",
+        "    ON o.product_id = p.product_id\n",
+        "\n",
+        "LEFT JOIN \n",
+        "    dbr_dev.brazilian_ecommerce_bronze.brz_products_categories pc\n",
+        "    ON p.product_category_name = pc.product_category_name\n",
+        "\n",
+        "WHERE\n",
+        "    o.source != 'evh_brazilian_ecommerce';"
+      ],
+      "columns": [
+        {
+          "displayName": "Average Order Value",
+          "description": "Total revenue divided by distinct order count",
+          "expression": "SUM(revenue) / COUNT(DISTINCT order_id)"
+        }
+      ]
+    },
+    {
+      "name": "top5_categories",
+      "displayName": "Top 5 Categories by Revenue",
+      "queryLines": [
+        "SELECT\n",
+        "  COALESCE(\n",
+        "    pc.product_category_name_english,\n",
+        "    p.product_category_name,\n",
+        "    'Unknown'\n",
+        "  ) AS product_category,\n",
+        "  ROUND(SUM(o.price), 2) AS total_revenue,\n",
+        "  COUNT(DISTINCT o.order_id) AS total_orders\n",
+        "FROM\n",
+        "  dbr_dev.brazilian_ecommerce_bronze.brz_orders o\n",
+        "    LEFT JOIN dbr_dev.brazilian_ecommerce_bronze.brz_products p\n",
+        "      ON o.product_id = p.product_id\n",
+        "    LEFT JOIN dbr_dev.brazilian_ecommerce_bronze.brz_products_categories pc\n",
+        "      ON p.product_category_name = pc.product_category_name\n",
+        "WHERE\n",
+        "  o.source != 'evh_brazilian_ecommerce'\n",
+        "GROUP BY\n",
+        "  COALESCE(pc.product_category_name_english, p.product_category_name, 'Unknown')\n",
+        "ORDER BY\n",
+        "  total_revenue DESC\n",
+        "LIMIT 5"
+      ]
+    },
+    {
+      "name": "revenue_by_region_map",
+      "displayName": "Revenue by Region (Map)",
+      "queryLines": [
+        "WITH region_rev AS (\n",
+        "  SELECT\n",
+        "    COALESCE(s.region, 'Unknown') AS region,\n",
+        "    ROUND(SUM(o.price), 2) AS region_revenue\n",
+        "  FROM\n",
+        "    dbr_dev.brazilian_ecommerce_bronze.brz_orders o\n",
+        "      LEFT JOIN dbr_dev.brazilian_ecommerce_bronze.brz_customers c\n",
+        "        ON o.customer_id = c.customer_id\n",
+        "      LEFT JOIN dbr_dev.brazilian_ecommerce_bronze.dim_brazil_states s\n",
+        "        ON c.customer_state = s.state_code\n",
+        "  WHERE\n",
+        "    o.source != 'evh_brazilian_ecommerce'\n",
+        "  GROUP BY\n",
+        "    COALESCE(s.region, 'Unknown')\n",
+        ")\n",
+        "SELECT DISTINCT\n",
+        "  s.state_name,\n",
+        "  COALESCE(s.region, 'Unknown') AS region,\n",
+        "  rr.region_revenue\n",
+        "FROM\n",
+        "  dbr_dev.brazilian_ecommerce_bronze.dim_brazil_states s\n",
+        "    LEFT JOIN region_rev rr\n",
+        "      ON COALESCE(s.region, 'Unknown') = rr.region\n",
+        "WHERE\n",
+        "  s.state_name IS NOT NULL"
+      ]
+    },
+    {
+      "name": "top10_categories_exec",
+      "displayName": "Top 10 Categories — Executive View",
+      "queryLines": [
+        "WITH category_agg AS (\n",
+        "  SELECT\n",
+        "    COALESCE(\n",
+        "      pc.product_category_name_english,\n",
+        "      p.product_category_name,\n",
+        "      'Unknown'\n",
+        "    ) AS product_category,\n",
+        "    ROUND(SUM(o.price), 2) AS total_revenue,\n",
+        "    COUNT(DISTINCT o.product_id) AS num_products\n",
+        "  FROM\n",
+        "    dbr_dev.brazilian_ecommerce_bronze.brz_orders o\n",
+        "      LEFT JOIN dbr_dev.brazilian_ecommerce_bronze.brz_products p\n",
+        "        ON o.product_id = p.product_id\n",
+        "      LEFT JOIN dbr_dev.brazilian_ecommerce_bronze.brz_products_categories pc\n",
+        "        ON p.product_category_name = pc.product_category_name\n",
+        "  WHERE\n",
+        "    o.source != 'evh_brazilian_ecommerce'\n",
+        "  GROUP BY\n",
+        "    COALESCE(pc.product_category_name_english, p.product_category_name, 'Unknown')\n",
+        "),\n",
+        "grand_total AS (\n",
+        "  SELECT\n",
+        "    SUM(total_revenue) AS total\n",
+        "  FROM\n",
+        "    category_agg\n",
+        ")\n",
+        "SELECT\n",
+        "  product_category,\n",
+        "  total_revenue,\n",
+        "  ROUND(total_revenue / grand_total.total * 100, 2) AS revenue_pct,\n",
+        "  num_products\n",
+        "FROM\n",
+        "  category_agg CROSS JOIN grand_total\n",
+        "ORDER BY\n",
+        "  total_revenue DESC\n",
+        "LIMIT 10"
+      ]
+    },
+    {
+      "name": "c67b484e",
+      "displayName": "dataset (Forecasted)",
+      "queryLines": [
+        "WITH original_table AS (\n",
+        "    SELECT \n",
+        "  DATE_TRUNC(\"MONTH\", `order_month`) AS order_month,\n",
+        "  SUM(`revenue`) AS revenue\n",
+        "FROM (\n",
+        "    SELECT\n",
+        "    o.order_id,\n",
+        "    o.order_timestamp,\n",
+        "    DATE(o.order_timestamp) AS order_date,\n",
+        "    DATE_TRUNC('month', o.order_timestamp) AS order_month,\n",
+        "    DATE_FORMAT(o.order_timestamp, 'yyyy-MM') AS order_month_label,\n",
+        "\n",
+        "    c.customer_id,\n",
+        "    c.customer_city,\n",
+        "    c.customer_state,\n",
+        "\n",
+        "    COALESCE(s.state_name, 'Unknown') AS state_name,\n",
+        "    COALESCE(s.region, 'Unknown') AS region,\n",
+        "\n",
+        "    o.product_id,\n",
+        "\n",
+        "    COALESCE(\n",
+        "        pc.product_category_name_english,\n",
+        "        p.product_category_name,\n",
+        "        'Unknown'\n",
+        "    ) AS product_category,\n",
+        "\n",
+        "    o.quantity,\n",
+        "    o.price,\n",
+        "    ROUND(o.price, 2) AS revenue,\n",
+        "\n",
+        "    CASE \n",
+        "        WHEN ROW_NUMBER() OVER (\n",
+        "            PARTITION BY o.order_id \n",
+        "            ORDER BY o.product_id\n",
+        "        ) = 1 \n",
+        "        THEN 1 \n",
+        "        ELSE 0 \n",
+        "    END AS total_orders,\n",
+        "\n",
+        "    o.source,\n",
+        "    o.ingestion_timestamp\n",
+        "\n",
+        "FROM\n",
+        "    dbr_dev.brazilian_ecommerce_bronze.brz_orders o\n",
+        "\n",
+        "LEFT JOIN \n",
+        "    dbr_dev.brazilian_ecommerce_bronze.brz_customers c\n",
+        "    ON o.customer_id = c.customer_id\n",
+        "\n",
+        "LEFT JOIN \n",
+        "    dbr_dev.brazilian_ecommerce_bronze.dim_brazil_states s\n",
+        "    ON c.customer_state = s.state_code\n",
+        "\n",
+        "LEFT JOIN \n",
+        "    dbr_dev.brazilian_ecommerce_bronze.brz_products p\n",
+        "    ON o.product_id = p.product_id\n",
+        "\n",
+        "LEFT JOIN \n",
+        "    dbr_dev.brazilian_ecommerce_bronze.brz_products_categories pc\n",
+        "    ON p.product_category_name = pc.product_category_name\n",
+        "\n",
+        "WHERE\n",
+        "    o.source != 'evh_brazilian_ecommerce'\n",
+        ") GROUP BY 1\n",
+        "  ),\n",
+        "  dates AS (\n",
+        "    SELECT \n",
+        "      MAX(order_month) AS max_date_column,\n",
+        "      MIN(order_month) AS min_date_column,\n",
+        "      MAX_BY(revenue, order_month) AS revenue\n",
+        "    FROM original_table\n",
+        "  ),\n",
+        "  forecast_table AS (\n",
+        "    SELECT \n",
+        "      order_month,\n",
+        "      revenue_forecast,\n",
+        "      revenue_upper,\n",
+        "      revenue_lower,\n",
+        "      NULL AS revenue\n",
+        "    FROM AI_FORECAST(\n",
+        "      TABLE(original_table),\n",
+        "      horizon => (\n",
+        "        SELECT\n",
+        "          max_date_column + MAKE_DT_INTERVAL(CAST(FLOOR(DATEDIFF(max_date_column, min_date_column) * 0.5) AS INT), 0, 0, 0)\n",
+        "        FROM dates\n",
+        "      ),\n",
+        "      time_col => 'order_month',\n",
+        "      value_col => 'revenue'\n",
+        "    )\n",
+        "  )\n",
+        "\n",
+        "  SELECT * FROM forecast_table\n",
+        "  UNION ALL\n",
+        "  SELECT\n",
+        "    order_month,\n",
+        "    NULL AS revenue_forecast,\n",
+        "    NULL AS revenue_upper,\n",
+        "    NULL AS revenue_lower,\n",
+        "    revenue\n",
+        "  FROM original_table\n",
+        "    WHERE order_month < (SELECT max_date_column FROM dates)\n",
+        "  UNION ALL\n",
+        "  SELECT\n",
+        "    max_date_column AS order_month,\n",
+        "    revenue AS revenue_forecast,\n",
+        "    revenue AS revenue_upper,\n",
+        "    revenue AS revenue_lower,\n",
+        "    revenue\n",
+        "  FROM\n",
+        "    dates"
+      ],
+      "columns": [
+        {
+          "displayName": "Average Order Value",
+          "description": "Total revenue divided by distinct order count",
+          "expression": "SUM(revenue) / COUNT(DISTINCT order_id)"
+        }
+      ]
+    },
+    {
+      "name": "rt_latest_orders",
+      "displayName": "RT — Latest Incoming Orders",
+      "queryLines": [
+        "SELECT\n",
+        "  o.order_id,\n",
+        "  o.order_timestamp,\n",
+        "  COALESCE(s.region, 'Unknown') AS region,\n",
+        "  COALESCE(\n",
+        "    pc.product_category_name_english,\n",
+        "    p.product_category_name,\n",
+        "    'Unknown'\n",
+        "  ) AS product_category,\n",
+        "  o.quantity,\n",
+        "  ROUND(o.price, 2) AS revenue\n",
+        "FROM\n",
+        "  dbr_dev.brazilian_ecommerce_bronze.brz_orders o\n",
+        "    LEFT JOIN dbr_dev.brazilian_ecommerce_bronze.brz_customers c\n",
+        "      ON o.customer_id = c.customer_id\n",
+        "    LEFT JOIN dbr_dev.brazilian_ecommerce_bronze.dim_brazil_states s\n",
+        "      ON c.customer_state = s.state_code\n",
+        "    LEFT JOIN dbr_dev.brazilian_ecommerce_bronze.brz_products p\n",
+        "      ON o.product_id = p.product_id\n",
+        "    LEFT JOIN dbr_dev.brazilian_ecommerce_bronze.brz_products_categories pc\n",
+        "      ON p.product_category_name = pc.product_category_name\n",
+        "WHERE\n",
+        "  o.source = 'evh_brazilian_ecommerce'\n",
+        "ORDER BY\n",
+        "  o.order_timestamp DESC\n",
+        "LIMIT 20"
+      ]
+    },
+    {
+      "name": "rt_hourly",
+      "displayName": "RT — Hourly Activity",
+      "queryLines": [
+        "SELECT\n",
+        "  DATE_TRUNC('hour', order_timestamp) AS order_hour,\n",
+        "  COUNT(DISTINCT order_id) AS orders_count,\n",
+        "  ROUND(SUM(price), 2) AS revenue\n",
+        "FROM\n",
+        "  dbr_dev.brazilian_ecommerce_bronze.brz_orders\n",
+        "WHERE\n",
+        "  source = 'evh_brazilian_ecommerce'\n",
+        "GROUP BY\n",
+        "  DATE_TRUNC('hour', order_timestamp)\n",
+        "ORDER BY\n",
+        "  order_hour ASC"
+      ]
+    },
+    {
+      "name": "rt_regional_streaming",
+      "displayName": "RT — Regional Performance",
+      "queryLines": [
+        "WITH region_rev AS (\n",
+        "  SELECT\n",
+        "    COALESCE(s.region, 'Unknown') AS region,\n",
+        "    ROUND(SUM(o.price), 2) AS region_revenue,\n",
+        "    COUNT(DISTINCT o.order_id) AS region_orders\n",
+        "  FROM\n",
+        "    dbr_dev.brazilian_ecommerce_bronze.brz_orders o\n",
+        "      LEFT JOIN dbr_dev.brazilian_ecommerce_bronze.brz_customers c\n",
+        "        ON o.customer_id = c.customer_id\n",
+        "      LEFT JOIN dbr_dev.brazilian_ecommerce_bronze.dim_brazil_states s\n",
+        "        ON c.customer_state = s.state_code\n",
+        "  WHERE\n",
+        "    o.source = 'evh_brazilian_ecommerce'\n",
+        "  GROUP BY\n",
+        "    COALESCE(s.region, 'Unknown')\n",
+        ")\n",
+        "SELECT DISTINCT\n",
+        "  s.state_name,\n",
+        "  COALESCE(s.region, 'Unknown') AS region,\n",
+        "  COALESCE(rr.region_revenue, 0) AS region_revenue,\n",
+        "  COALESCE(rr.region_orders, 0) AS region_orders\n",
+        "FROM\n",
+        "  dbr_dev.brazilian_ecommerce_bronze.dim_brazil_states s\n",
+        "    LEFT JOIN region_rev rr\n",
+        "      ON COALESCE(s.region, 'Unknown') = rr.region\n",
+        "WHERE\n",
+        "  s.state_name IS NOT NULL"
+      ]
+    },
+    {
+      "name": "rt_kpis",
+      "displayName": "RT — KPIs (Latest Day)",
+      "queryLines": [
+        "WITH latest_date AS (\n",
+        "  SELECT\n",
+        "    COALESCE(DATE(MAX(order_timestamp)), CURRENT_DATE()) AS max_date\n",
+        "  FROM dbr_dev.brazilian_ecommerce_bronze.brz_orders\n",
+        "  WHERE source = 'evh_brazilian_ecommerce'\n",
+        ")\n",
+        "\n",
+        "SELECT\n",
+        "  ld.max_date AS report_date,\n",
+        "  COUNT(DISTINCT o.order_id) AS orders_latest_day,\n",
+        "  ROUND(SUM(o.quantity * o.price), 2) AS revenue_latest_day,\n",
+        "  ROUND(\n",
+        "    SUM(o.quantity * o.price) / NULLIF(COUNT(DISTINCT o.order_id), 0),\n",
+        "    2\n",
+        "  ) AS aov_latest_day,\n",
+        "  COUNT(DISTINCT o.customer_id) AS customers_latest_day,\n",
+        "  MAX(o.order_timestamp) AS last_event_received\n",
+        "FROM dbr_dev.brazilian_ecommerce_bronze.brz_orders o\n",
+        "CROSS JOIN latest_date ld\n",
+        "WHERE o.source = 'evh_brazilian_ecommerce'\n",
+        "  AND DATE(o.order_timestamp) = ld.max_date\n",
+        "GROUP BY ld.max_date;"
+      ]
+    },
+    {
+      "name": "rt_pipeline_status",
+      "displayName": "RT — Pipeline Status",
+      "queryLines": [
+        "SELECT\n",
+        "  CASE\n",
+        "    WHEN MAX(order_timestamp) >= current_timestamp() - INTERVAL 24 HOURS THEN '🟢 Active'\n",
+        "    ELSE '🔴 Inactive'\n",
+        "  END AS pipeline_status,\n",
+        "  CONCAT(\n",
+        "    'Latest streaming event received: ',\n",
+        "    date_format(MAX(order_timestamp), 'dd MMM yyyy | HH:mm:ss'),\n",
+        "    ' UTC'\n",
+        "  ) AS latest_event_text\n",
+        "FROM\n",
+        "  dbr_dev.brazilian_ecommerce_bronze.brz_orders\n",
+        "WHERE\n",
+        "  source = 'evh_brazilian_ecommerce'"
+      ]
+    }
+  ],
+  "pages": [
+    {
+      "name": "63c4142d",
+      "displayName": "Executive Overview",
+      "layout": [
+        {
+          "widget": {
+            "name": "header_text",
+            "multilineTextboxSpec": {
+              "lines": [
+                "## Brazilian E-Commerce Historical Analytics Platform\n",
+                "\n",
+                "## <span style=\"font-size:14px\">Leveraging historical sales data to uncover revenue trends, customer behavior, and market opportunities</span>"
+              ]
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 12,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_revenue",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "d9b56b61",
+                  "fields": [
+                    {
+                      "name": "sum(revenue)",
+                      "expression": "SUM(`revenue`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "title": "Total Revenue",
+                "showTitle": true,
+                "headerAlignment": "center"
+              },
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "sum(revenue)",
+                  "rowNumber": 0
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_orders",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "d9b56b61",
+                  "fields": [
+                    {
+                      "name": "countdistinct(order_id)",
+                      "expression": "COUNT(DISTINCT `order_id`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "title": "Total Orders",
+                "showTitle": true,
+                "headerAlignment": "center"
+              },
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "countdistinct(order_id)",
+                  "rowNumber": 0
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 2,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_items",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "d9b56b61",
+                  "fields": [
+                    {
+                      "name": "sum(quantity)",
+                      "expression": "SUM(`quantity`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "title": "Total Items Sold",
+                "showTitle": true,
+                "headerAlignment": "center"
+              },
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "sum(quantity)",
+                  "rowNumber": 0
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 2,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "kpi_aov",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "d9b56b61",
+                  "fields": [
+                    {
+                      "name": "measure(Average Order Value)",
+                      "expression": "MEASURE(`Average Order Value`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "title": "Avg Order Value",
+                "showTitle": true,
+                "headerAlignment": "center"
+              },
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "measure(Average Order Value)",
+                  "rowNumber": 0
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 9,
+            "y": 2,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "64a7bb7d",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "top5_categories",
+                  "fields": [
+                    {
+                      "name": "sum(total_revenue)",
+                      "expression": "SUM(`total_revenue`)"
+                    },
+                    {
+                      "name": "product_category",
+                      "expression": "`product_category`"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "frame": {
+                "title": "Which Categories Drive Revenue?",
+                "showTitle": true
+              },
+              "widgetType": "bar",
+              "encodings": {
+                "x": {
+                  "fieldName": "sum(total_revenue)",
+                  "axis": {
+                    "hideTitle": true
+                  },
+                  "scale": {
+                    "type": "quantitative"
+                  }
+                },
+                "y": {
+                  "fieldName": "product_category",
+                  "axis": {
+                    "hideTitle": true
+                  },
+                  "scale": {
+                    "type": "categorical",
+                    "sort": {
+                      "by": "x-reversed"
+                    }
+                  }
+                },
+                "label": {
+                  "show": true
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 11,
+            "width": 7,
+            "height": 7
+          }
+        },
+        {
+          "widget": {
+            "name": "3af5d9ea",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "revenue_by_region_map",
+                  "fields": [
+                    {
+                      "name": "region_revenue",
+                      "expression": "`region_revenue`"
+                    },
+                    {
+                      "name": "region",
+                      "expression": "`region`"
+                    },
+                    {
+                      "name": "state_name",
+                      "expression": "`state_name`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 1,
+              "frame": {
+                "title": "Which regions generate the highest revenue?",
+                "showTitle": true,
+                "showDescription": false
+              },
+              "mark": {
+                "opacity": 1
+              },
+              "widgetType": "choropleth-map",
+              "encodings": {
+                "color": {
+                  "fieldName": "region_revenue",
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "USD",
+                    "abbreviation": "compact",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 1
+                    }
+                  },
+                  "legend": {
+                    "hideTitle": true,
+                    "hide": false
+                  },
+                  "displayName": "Region Revenue (BRL)",
+                  "scale": {
+                    "type": "quantitative",
+                    "colorRamp": {
+                      "mode": "scheme",
+                      "scheme": "blues"
+                    },
+                    "reverse": true,
+                    "domain": {
+                      "min": 0
+                    }
+                  }
+                },
+                "extra": [
+                  {
+                    "fieldName": "region",
+                    "displayName": "Region"
+                  }
+                ],
+                "region": {
+                  "regionType": "mapbox-v4-admin",
+                  "admin0": {
+                    "type": "value",
+                    "geographicRole": "admin0-iso-3166-1-alpha-3",
+                    "value": "BRA"
+                  },
+                  "admin1": {
+                    "fieldName": "state_name",
+                    "type": "field",
+                    "geographicRole": "admin1-name"
+                  }
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 7,
+            "y": 11,
+            "width": 5,
+            "height": 7
+          }
+        },
+        {
+          "widget": {
+            "name": "revenue_trend_by_region",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "top10_categories_exec",
+                  "fields": [
+                    {
+                      "name": "product_category",
+                      "expression": "`product_category`"
+                    },
+                    {
+                      "name": "total_revenue",
+                      "expression": "`total_revenue`"
+                    },
+                    {
+                      "name": "revenue_pct",
+                      "expression": "`revenue_pct`"
+                    },
+                    {
+                      "name": "num_products",
+                      "expression": "`num_products`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "displayRowNumbers": true,
+              "frame": {
+                "title": "Which Product Categories Are Driving Our Revenue?",
+                "showTitle": true,
+                "headerAlignment": "left"
+              },
+              "headerHeight": 50,
+              "headerStyle": {
+                "textCase": "capitalize"
+              },
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "product_category",
+                    "displayName": "Product Category"
+                  },
+                  {
+                    "fieldName": "total_revenue",
+                    "format": {
+                      "type": "number-currency",
+                      "currencyCode": "BRL",
+                      "abbreviation": "compact",
+                      "decimalPlaces": {
+                        "type": "max",
+                        "places": 1
+                      }
+                    },
+                    "displayName": "Total Revenue"
+                  },
+                  {
+                    "fieldName": "revenue_pct",
+                    "format": {
+                      "type": "number-plain",
+                      "abbreviation": "none",
+                      "decimalPlaces": {
+                        "type": "exact",
+                        "places": 2
+                      }
+                    },
+                    "displayName": "Revenue Contribution",
+                    "formatTemplate": "{{ @formatted }}%"
+                  },
+                  {
+                    "fieldName": "num_products",
+                    "format": {
+                      "type": "number-plain",
+                      "abbreviation": "none",
+                      "decimalPlaces": {
+                        "type": "max",
+                        "places": 0
+                      }
+                    },
+                    "displayName": "# Products"
+                  }
+                ]
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 18,
+            "width": 12,
+            "height": 7
+          }
+        },
+        {
+          "widget": {
+            "name": "1ba9bafa",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "c67b484e",
+                  "fields": [
+                    {
+                      "name": "order_month",
+                      "expression": "`order_month`"
+                    },
+                    {
+                      "name": "revenue",
+                      "expression": "`revenue`"
+                    },
+                    {
+                      "name": "revenue_forecast",
+                      "expression": "`revenue_forecast`"
+                    },
+                    {
+                      "name": "revenue_upper",
+                      "expression": "`revenue_upper`"
+                    },
+                    {
+                      "name": "revenue_lower",
+                      "expression": "`revenue_lower`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 1,
+              "mark": {
+                "colors": [
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 1
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 2
+                  },
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 3
+                  }
+                ]
+              },
+              "frame": {
+                "title": "How Is Revenue Expected to Change?",
+                "showTitle": true,
+                "showDescription": false
+              },
+              "widgetType": "forecast-line",
+              "encodings": {
+                "x": {
+                  "fieldName": "order_month",
+                  "axis": {
+                    "hideTitle": true
+                  },
+                  "displayName": "Month",
+                  "scale": {
+                    "type": "temporal"
+                  }
+                },
+                "y": {
+                  "scale": {
+                    "type": "quantitative"
+                  },
+                  "axis": {
+                    "hideTitle": false,
+                    "title": "Revenue (BRL)"
+                  },
+                  "original": {
+                    "fieldName": "revenue",
+                    "displayName": "Historical Revenue (BRL)"
+                  },
+                  "prediction": {
+                    "fieldName": "revenue_forecast",
+                    "displayName": "Forecast"
+                  },
+                  "predictionUpper": {
+                    "fieldName": "revenue_upper",
+                    "displayName": "Upper Bound"
+                  },
+                  "predictionLower": {
+                    "fieldName": "revenue_lower",
+                    "displayName": "Lower Bound"
+                  }
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 5,
+            "width": 12,
+            "height": 6
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layoutVersion": "GRID_V1"
+    },
+    {
+      "name": "global_filters",
+      "displayName": "Global Filters",
+      "layout": [
+        {
+          "widget": {
+            "name": "filter_order_date",
+            "queries": [
+              {
+                "name": "dashboards/01f18e5361671c8e8bb867d85a7aa004/datasets/01f18e53686e196aa22c0118a06ecc62_order_date",
+                "query": {
+                  "datasetName": "d9b56b61",
+                  "fields": [
+                    {
+                      "name": "order_date",
+                      "expression": "`order_date`"
+                    },
+                    {
+                      "name": "order_date_associativity",
+                      "expression": "COUNT_IF(`associative_filter_predicate_group`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "title": "Order Date",
+                "showTitle": true
+              },
+              "widgetType": "filter-date-range-picker",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "order_date",
+                    "queryName": "dashboards/01f18e5361671c8e8bb867d85a7aa004/datasets/01f18e53686e196aa22c0118a06ecc62_order_date"
+                  }
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 6,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "filter_product_category",
+            "queries": [
+              {
+                "name": "dashboards/01f18e5361671c8e8bb867d85a7aa004/datasets/01f18e53686e196aa22c0118a06ecc62_product_category",
+                "query": {
+                  "datasetName": "d9b56b61",
+                  "fields": [
+                    {
+                      "name": "product_category",
+                      "expression": "`product_category`"
+                    },
+                    {
+                      "name": "product_category_associativity",
+                      "expression": "COUNT_IF(`associative_filter_predicate_group`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "title": "Product Category",
+                "showTitle": true
+              },
+              "widgetType": "filter-multi-select",
+              "encodings": {
+                "fields": [
+                  {
+                    "fieldName": "product_category",
+                    "queryName": "dashboards/01f18e5361671c8e8bb867d85a7aa004/datasets/01f18e53686e196aa22c0118a06ecc62_product_category"
+                  }
+                ]
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 0,
+            "width": 6,
+            "height": 2
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_GLOBAL_FILTERS",
+      "layoutVersion": "GRID_V1"
+    },
+    {
+      "name": "rt_operations",
+      "displayName": "Real-Time Operations",
+      "layout": [
+        {
+          "widget": {
+            "name": "rt_header",
+            "multilineTextboxSpec": {
+              "lines": [
+                "<span style=\"font-size: 23px;\">Brazilian E-Commerce — Real-Time Operations Dashboard</span>\n",
+                "\n",
+                "Monitoring live order activity, customer demand, and operational performance as events arrive."
+              ],
+              "verticalAlign": "VERTICAL_ALIGN_CENTER"
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 0,
+            "width": 12,
+            "height": 2
+          }
+        },
+        {
+          "widget": {
+            "name": "rt_activity_trend",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "rt_hourly",
+                  "fields": [
+                    {
+                      "name": "orders_count",
+                      "expression": "`orders_count`"
+                    },
+                    {
+                      "name": "order_hour",
+                      "expression": "`order_hour`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "frame": {
+                "title": "Order Activity",
+                "description": "Hourly orders received from the live pipeline",
+                "showTitle": true,
+                "showDescription": true
+              },
+              "mark": {
+                "colors": [
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 1
+                  }
+                ],
+                "opacity": 0.75,
+                "marker": {
+                  "shape": "circle"
+                }
+              },
+              "widgetType": "area",
+              "encodings": {
+                "x": {
+                  "fieldName": "order_hour",
+                  "axis": {
+                    "hideTitle": true
+                  },
+                  "scale": {
+                    "type": "temporal"
+                  }
+                },
+                "y": {
+                  "fieldName": "orders_count",
+                  "axis": {
+                    "hideTitle": false,
+                    "title": "Orders"
+                  },
+                  "format": {
+                    "type": "number-plain",
+                    "abbreviation": "compact",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 0
+                    }
+                  },
+                  "displayName": "Orders",
+                  "scale": {
+                    "type": "quantitative",
+                    "domain": {
+                      "min": 0
+                    }
+                  }
+                },
+                "label": {
+                  "show": true,
+                  "display": {
+                    "type": "y-max"
+                  },
+                  "text": {
+                    "fieldName": "orders_count",
+                    "displayName": "Orders"
+                  }
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 7,
+            "width": 6,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "rt_kpi_orders",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "rt_kpis",
+                  "fields": [
+                    {
+                      "name": "sum(orders_latest_day)",
+                      "expression": "SUM(`orders_latest_day`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "title": "Orders Processed",
+                "showTitle": true,
+                "headerAlignment": "center"
+              },
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "sum(orders_latest_day)",
+                  "rowNumber": 0
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 4,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "rt_revenue_trend",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "rt_hourly",
+                  "fields": [
+                    {
+                      "name": "revenue",
+                      "expression": "`revenue`"
+                    },
+                    {
+                      "name": "order_hour",
+                      "expression": "`order_hour`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 3,
+              "frame": {
+                "title": "Revenue Generated",
+                "description": "Hourly revenue (BRL) from the live pipeline",
+                "showTitle": true,
+                "showDescription": true
+              },
+              "mark": {
+                "colors": [
+                  {
+                    "themeColorType": "visualizationColors",
+                    "position": 3
+                  }
+                ],
+                "opacity": 0.75,
+                "marker": {
+                  "shape": "circle"
+                }
+              },
+              "widgetType": "area",
+              "encodings": {
+                "x": {
+                  "fieldName": "order_hour",
+                  "axis": {
+                    "hideTitle": true
+                  },
+                  "scale": {
+                    "type": "temporal"
+                  }
+                },
+                "y": {
+                  "fieldName": "revenue",
+                  "axis": {
+                    "hideTitle": false,
+                    "title": "Revenue (BRL)"
+                  },
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "BRL",
+                    "abbreviation": "compact",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 1
+                    }
+                  },
+                  "displayName": "Revenue (BRL)",
+                  "scale": {
+                    "type": "quantitative",
+                    "domain": {
+                      "min": 0
+                    }
+                  }
+                },
+                "label": {
+                  "show": true,
+                  "display": {
+                    "type": "y-max"
+                  },
+                  "text": {
+                    "fieldName": "revenue",
+                    "displayName": "Revenue (BRL)"
+                  }
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 7,
+            "width": 6,
+            "height": 6
+          }
+        },
+        {
+          "widget": {
+            "name": "rt_kpi_revenue",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "rt_kpis",
+                  "fields": [
+                    {
+                      "name": "sum(revenue_latest_day)",
+                      "expression": "SUM(`revenue_latest_day`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "title": "Revenue Generated",
+                "showTitle": true,
+                "headerAlignment": "center"
+              },
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "sum(revenue_latest_day)",
+                  "rowNumber": 0
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 3,
+            "y": 4,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "rt_kpi_aov",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "rt_kpis",
+                  "fields": [
+                    {
+                      "name": "sum(aov_latest_day)",
+                      "expression": "SUM(`aov_latest_day`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "title": "Avg Order Value",
+                "showTitle": true,
+                "headerAlignment": "center"
+              },
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "sum(aov_latest_day)",
+                  "rowNumber": 0
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 4,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "rt_kpi_customers",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "rt_kpis",
+                  "fields": [
+                    {
+                      "name": "sum(customers_latest_day)",
+                      "expression": "SUM(`customers_latest_day`)"
+                    }
+                  ],
+                  "disaggregated": false
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "title": "Active Customers",
+                "showTitle": true,
+                "headerAlignment": "center"
+              },
+              "widgetType": "counter",
+              "encodings": {
+                "value": {
+                  "fieldName": "sum(customers_latest_day)",
+                  "rowNumber": 0
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 9,
+            "y": 4,
+            "width": 3,
+            "height": 3
+          }
+        },
+        {
+          "widget": {
+            "name": "rt_regional_map",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "rt_regional_streaming",
+                  "fields": [
+                    {
+                      "name": "region_revenue",
+                      "expression": "`region_revenue`"
+                    },
+                    {
+                      "name": "region",
+                      "expression": "`region`"
+                    },
+                    {
+                      "name": "region_orders",
+                      "expression": "`region_orders`"
+                    },
+                    {
+                      "name": "state_name",
+                      "expression": "`state_name`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 1,
+              "frame": {
+                "title": "Live Regional Performance",
+                "showTitle": true
+              },
+              "mark": {
+                "opacity": 1
+              },
+              "widgetType": "choropleth-map",
+              "encodings": {
+                "color": {
+                  "fieldName": "region_revenue",
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "BRL",
+                    "abbreviation": "compact",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 1
+                    }
+                  },
+                  "displayName": "Revenue (BRL)",
+                  "scale": {
+                    "type": "quantitative",
+                    "colorRamp": {
+                      "mode": "scheme",
+                      "scheme": "orangered"
+                    }
+                  }
+                },
+                "extra": [
+                  {
+                    "fieldName": "region",
+                    "displayName": "Region"
+                  },
+                  {
+                    "fieldName": "region_orders",
+                    "displayName": "Orders"
+                  }
+                ],
+                "region": {
+                  "regionType": "mapbox-v4-admin",
+                  "admin0": {
+                    "type": "value",
+                    "geographicRole": "admin0-iso-3166-1-alpha-3",
+                    "value": "BRA"
+                  },
+                  "admin1": {
+                    "fieldName": "state_name",
+                    "type": "field",
+                    "geographicRole": "admin1-name"
+                  }
+                }
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 13,
+            "width": 6,
+            "height": 8
+          }
+        },
+        {
+          "widget": {
+            "name": "rt_latest_orders",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "rt_latest_orders",
+                  "fields": [
+                    {
+                      "name": "order_timestamp",
+                      "expression": "`order_timestamp`"
+                    },
+                    {
+                      "name": "order_id",
+                      "expression": "`order_id`"
+                    },
+                    {
+                      "name": "region",
+                      "expression": "`region`"
+                    },
+                    {
+                      "name": "product_category",
+                      "expression": "`product_category`"
+                    },
+                    {
+                      "name": "quantity",
+                      "expression": "`quantity`"
+                    },
+                    {
+                      "name": "revenue",
+                      "expression": "`revenue`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "title": "Latest Incoming Orders",
+                "showTitle": true
+              },
+              "headerHeight": 50,
+              "headerStyle": {
+                "textCase": "capitalize"
+              },
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "order_timestamp",
+                    "displayName": "Timestamp"
+                  },
+                  {
+                    "fieldName": "order_id",
+                    "displayName": "Order ID"
+                  },
+                  {
+                    "fieldName": "region",
+                    "displayName": "Region"
+                  },
+                  {
+                    "fieldName": "product_category",
+                    "displayName": "Product Category"
+                  },
+                  {
+                    "fieldName": "quantity",
+                    "format": {
+                      "type": "number-plain",
+                      "abbreviation": "none"
+                    },
+                    "displayName": "Qty"
+                  },
+                  {
+                    "fieldName": "revenue",
+                    "format": {
+                      "type": "number-currency",
+                      "currencyCode": "BRL",
+                      "abbreviation": "none",
+                      "decimalPlaces": {
+                        "type": "exact",
+                        "places": 2
+                      }
+                    },
+                    "displayName": "Revenue (BRL)"
+                  }
+                ]
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 6,
+            "y": 13,
+            "width": 6,
+            "height": 8
+          }
+        },
+        {
+          "widget": {
+            "name": "rt_pipeline_status",
+            "queries": [
+              {
+                "name": "main_query",
+                "query": {
+                  "datasetName": "rt_pipeline_status",
+                  "fields": [
+                    {
+                      "name": "pipeline_status",
+                      "expression": "`pipeline_status`"
+                    },
+                    {
+                      "name": "latest_event_text",
+                      "expression": "`latest_event_text`"
+                    }
+                  ],
+                  "disaggregated": true
+                }
+              }
+            ],
+            "spec": {
+              "version": 2,
+              "frame": {
+                "title": "Data Pipeline Status",
+                "showTitle": true,
+                "showDescription": false,
+                "headerAlignment": "left"
+              },
+              "widgetType": "table",
+              "encodings": {
+                "columns": [
+                  {
+                    "fieldName": "pipeline_status",
+                    "displayName": "Status"
+                  },
+                  {
+                    "fieldName": "latest_event_text",
+                    "displayName": "Latest Event Received"
+                  }
+                ]
+              },
+              "data": {
+                "queryName": "main_query"
+              }
+            }
+          },
+          "position": {
+            "x": 0,
+            "y": 2,
+            "width": 12,
+            "height": 2
+          }
+        }
+      ],
+      "pageType": "PAGE_TYPE_CANVAS",
+      "layoutVersion": "GRID_V1"
+    }
+  ],
+  "uiSettings": {
+    "theme": {
+      "canvasBackgroundColor": {
+        "light": "#F0F0F0",
+        "dark": "#121317"
+      },
+      "widgetBackgroundColor": {
+        "light": "#F0F0F0",
+        "dark": "#121317"
+      },
+      "widgetBorderColor": {
+        "light": "#171717",
+        "dark": "#9D9DA0"
+      },
+      "fontColor": {
+        "light": "#404040",
+        "dark": "#F7F5F2"
+      },
+      "selectionColor": {
+        "light": "#0061FE",
+        "dark": "#5A9FFF"
+      },
+      "visualizationColors": [
+        "#377EB8",
+        "#4DAF4A",
+        "#984EA3",
+        "#FF7F00",
+        "#FFFF33",
+        "#A65628",
+        "#F781BF"
+      ],
+      "widgetHeaderAlignment": "LEFT",
+      "fontFamily": "Roboto Mono",
+      "widgetPadding": 16,
+      "widgetMargin": 0,
+      "widgetCornerRadius": 0,
+      "widgetShadow": 0,
+      "continuousGradient": {
+        "lightMode": {
+          "fromCategoricalIndex": 0
+        },
+        "darkMode": {
+          "fromCategoricalIndex": 0
+        }
+      },
+      "fontSettings": {
+        "base": {
+          "fontFamily": "Roboto Mono",
+          "fontColor": {
+            "light": "#404040",
+            "dark": "#F7F5F2"
+          },
+          "fontSize": 13,
+          "fontWeight": 400
+        },
+        "widgetTitle": {
+          "fontSize": 15,
+          "fontWeight": 500
+        },
+        "widgetDescription": {
+          "fontSize": 13,
+          "fontWeight": 400
+        },
+        "fieldTitle": {
+          "textCase": "TEXT_CASE_UPPERCASE",
+          "fontColor": {
+            "light": "#535353",
+            "dark": "#DEDDDA"
+          },
+          "fontSize": 12,
+          "fontWeight": 400
+        },
+        "fieldValue": {
+          "fontColor": {
+            "light": "#535353",
+            "dark": "#DEDDDA"
+          },
+          "fontSize": 12,
+          "fontWeight": 400
+        }
+      },
+      "gridLineColor": {
+        "light": "#D1D1D1",
+        "dark": "#3B3B3E"
+      },
+      "axisLineColor": {
+        "light": "#C1C1C1",
+        "dark": "#4F5052"
+      }
+    },
+    "applyModeEnabled": false
+  }
+}
