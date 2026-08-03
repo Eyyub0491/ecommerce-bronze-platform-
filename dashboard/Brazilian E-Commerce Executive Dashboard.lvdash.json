@@ -305,7 +305,7 @@
       "queryLines": [
         "SELECT\n",
         "  o.order_id,\n",
-        "  o.order_timestamp,\n",
+        "  o.ingestion_timestamp AS order_timestamp,\n",
         "  COALESCE(s.region, 'Unknown') AS region,\n",
         "  COALESCE(\n",
         "    pc.product_category_name_english,\n",
@@ -327,7 +327,7 @@
         "WHERE\n",
         "  o.source = 'evh_brazilian_ecommerce'\n",
         "ORDER BY\n",
-        "  o.order_timestamp DESC\n",
+        "  o.ingestion_timestamp DESC\n",
         "LIMIT 20"
       ]
     },
@@ -336,7 +336,7 @@
       "displayName": "RT — Hourly Activity",
       "queryLines": [
         "SELECT\n",
-        "  DATE_TRUNC('hour', order_timestamp) AS order_hour,\n",
+        "  DATE_TRUNC('hour', ingestion_timestamp) AS order_hour,\n",
         "  COUNT(DISTINCT order_id) AS orders_count,\n",
         "  ROUND(SUM(price), 2) AS revenue\n",
         "FROM\n",
@@ -344,7 +344,7 @@
         "WHERE\n",
         "  source = 'evh_brazilian_ecommerce'\n",
         "GROUP BY\n",
-        "  DATE_TRUNC('hour', order_timestamp)\n",
+        "  DATE_TRUNC('hour', ingestion_timestamp)\n",
         "ORDER BY\n",
         "  order_hour ASC"
       ]
@@ -377,7 +377,7 @@
         "FROM\n",
         "  dbr_dev.brazilian_ecommerce_bronze.dim_brazil_states s\n",
         "    LEFT JOIN region_rev rr\n",
-        "      ON COALESCE(s.region, 'Unknown') = rr.region\n",
+        "      ON s.region = rr.region\n",
         "WHERE\n",
         "  s.state_name IS NOT NULL"
       ]
@@ -388,26 +388,26 @@
       "queryLines": [
         "WITH latest_date AS (\n",
         "  SELECT\n",
-        "    COALESCE(DATE(MAX(order_timestamp)), CURRENT_DATE()) AS max_date\n",
-        "  FROM dbr_dev.brazilian_ecommerce_bronze.brz_orders\n",
-        "  WHERE source = 'evh_brazilian_ecommerce'\n",
+        "    COALESCE(DATE(MAX(ingestion_timestamp)), CURRENT_DATE()) AS max_date\n",
+        "  FROM\n",
+        "    dbr_dev.brazilian_ecommerce_bronze.brz_orders\n",
+        "  WHERE\n",
+        "    source = 'evh_brazilian_ecommerce'\n",
         ")\n",
-        "\n",
         "SELECT\n",
         "  ld.max_date AS report_date,\n",
         "  COUNT(DISTINCT o.order_id) AS orders_latest_day,\n",
         "  ROUND(SUM(o.quantity * o.price), 2) AS revenue_latest_day,\n",
-        "  ROUND(\n",
-        "    SUM(o.quantity * o.price) / NULLIF(COUNT(DISTINCT o.order_id), 0),\n",
-        "    2\n",
-        "  ) AS aov_latest_day,\n",
+        "  ROUND(SUM(o.quantity * o.price) / NULLIF(COUNT(DISTINCT o.order_id), 0), 2) AS aov_latest_day,\n",
         "  COUNT(DISTINCT o.customer_id) AS customers_latest_day,\n",
-        "  MAX(o.order_timestamp) AS last_event_received\n",
-        "FROM dbr_dev.brazilian_ecommerce_bronze.brz_orders o\n",
-        "CROSS JOIN latest_date ld\n",
-        "WHERE o.source = 'evh_brazilian_ecommerce'\n",
-        "  AND DATE(o.order_timestamp) = ld.max_date\n",
-        "GROUP BY ld.max_date;"
+        "  MAX(o.ingestion_timestamp) AS last_event_received\n",
+        "FROM\n",
+        "  dbr_dev.brazilian_ecommerce_bronze.brz_orders o CROSS JOIN latest_date ld\n",
+        "WHERE\n",
+        "  o.source = 'evh_brazilian_ecommerce'\n",
+        "  AND DATE(o.ingestion_timestamp) = ld.max_date\n",
+        "GROUP BY\n",
+        "  ld.max_date"
       ]
     },
     {
@@ -416,12 +416,12 @@
       "queryLines": [
         "SELECT\n",
         "  CASE\n",
-        "    WHEN MAX(order_timestamp) >= current_timestamp() - INTERVAL 24 HOURS THEN '🟢 Active'\n",
+        "    WHEN MAX(ingestion_timestamp) >= current_timestamp() - INTERVAL 24 HOURS THEN '🟢 Active'\n",
         "    ELSE '🔴 Inactive'\n",
         "  END AS pipeline_status,\n",
         "  CONCAT(\n",
         "    'Latest streaming event received: ',\n",
-        "    date_format(MAX(order_timestamp), 'dd MMM yyyy | HH:mm:ss'),\n",
+        "    date_format(MAX(ingestion_timestamp), 'dd MMM yyyy | HH:mm:ss'),\n",
         "    ' UTC'\n",
         "  ) AS latest_event_text\n",
         "FROM\n",
@@ -483,7 +483,16 @@
               "encodings": {
                 "value": {
                   "fieldName": "sum(revenue)",
-                  "rowNumber": 0
+                  "rowNumber": 0,
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "BRL",
+                    "abbreviation": "compact",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 1
+                    }
+                  }
                 }
               },
               "data": {
@@ -615,7 +624,16 @@
               "encodings": {
                 "value": {
                   "fieldName": "measure(Average Order Value)",
-                  "rowNumber": 0
+                  "rowNumber": 0,
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "BRL",
+                    "abbreviation": "none",
+                    "decimalPlaces": {
+                      "type": "exact",
+                      "places": 2
+                    }
+                  }
                 }
               },
               "data": {
@@ -664,6 +682,15 @@
                   "fieldName": "sum(total_revenue)",
                   "axis": {
                     "hideTitle": true
+                  },
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "BRL",
+                    "abbreviation": "compact",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 1
+                    }
                   },
                   "scale": {
                     "type": "quantitative"
@@ -726,9 +753,8 @@
             "spec": {
               "version": 1,
               "frame": {
-                "title": "Which regions generate the highest revenue?",
-                "showTitle": true,
-                "showDescription": false
+                "title": "Revenue by Region",
+                "showTitle": true
               },
               "mark": {
                 "opacity": 1
@@ -739,7 +765,7 @@
                   "fieldName": "region_revenue",
                   "format": {
                     "type": "number-currency",
-                    "currencyCode": "USD",
+                    "currencyCode": "BRL",
                     "abbreviation": "compact",
                     "decimalPlaces": {
                       "type": "max",
@@ -1400,7 +1426,16 @@
               "encodings": {
                 "value": {
                   "fieldName": "sum(revenue_latest_day)",
-                  "rowNumber": 0
+                  "rowNumber": 0,
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "BRL",
+                    "abbreviation": "compact",
+                    "decimalPlaces": {
+                      "type": "max",
+                      "places": 1
+                    }
+                  }
                 }
               },
               "data": {
@@ -1444,7 +1479,16 @@
               "encodings": {
                 "value": {
                   "fieldName": "sum(aov_latest_day)",
-                  "rowNumber": 0
+                  "rowNumber": 0,
+                  "format": {
+                    "type": "number-currency",
+                    "currencyCode": "BRL",
+                    "abbreviation": "none",
+                    "decimalPlaces": {
+                      "type": "exact",
+                      "places": 2
+                    }
+                  }
                 }
               },
               "data": {
